@@ -1009,7 +1009,10 @@ impl Qwen3TextEmbedding {
     ) -> Result<Self> {
         use tokenizers::{PaddingParams, PaddingStrategy, TruncationParams};
 
-        let api = ApiBuilder::new()
+        // from_env() honors HF_HOME / HF_ENDPOINT (matching common.rs
+        // pull_from_hf); plain new() would pin the cache to
+        // $HOME/.cache/huggingface/hub and ignore those variables.
+        let api = ApiBuilder::from_env()
             .with_progress(true)
             .build()
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
@@ -1157,7 +1160,10 @@ impl Qwen3VLEmbedding {
     ) -> Result<Self> {
         use tokenizers::{PaddingDirection, PaddingParams, PaddingStrategy, TruncationParams};
 
-        let api = ApiBuilder::new()
+        // from_env() honors HF_HOME / HF_ENDPOINT (matching common.rs
+        // pull_from_hf); plain new() would pin the cache to
+        // $HOME/.cache/huggingface/hub and ignore those variables.
+        let api = ApiBuilder::from_env()
             .with_progress(true)
             .build()
             .map_err(map_err)?;
@@ -1533,5 +1539,34 @@ mod tests {
         assert_eq!(round_ties_to_even(12.5), 12);
         assert_eq!(round_ties_to_even(13.5), 14);
         assert_eq!(round_ties_to_even(9.5625), 10);
+    }
+
+    // Regression guard for from_hf honoring HF_HOME. from_hf builds its
+    // hf-hub Api with ApiBuilder::from_env(), whose cache resolves through
+    // Cache::from_env(): HF_HOME -> $HF_HOME/hub. This locks that contract
+    // without downloading any weights. HF_HOME is process-global, so this
+    // test must run single-threaded and restore the prior value.
+    #[cfg(feature = "hf-hub")]
+    #[test]
+    fn from_env_cache_honors_hf_home() {
+        use hf_hub::Cache;
+        use std::path::PathBuf;
+
+        let prev = std::env::var_os("HF_HOME");
+        let tmp = std::env::temp_dir().join("fastembed-hf-home-test");
+        unsafe {
+            std::env::set_var("HF_HOME", &tmp);
+        }
+
+        let cache_path = Cache::from_env().path().clone();
+
+        unsafe {
+            match &prev {
+                Some(v) => std::env::set_var("HF_HOME", v),
+                None => std::env::remove_var("HF_HOME"),
+            }
+        }
+
+        assert_eq!(cache_path, PathBuf::from(&tmp).join("hub"));
     }
 }
